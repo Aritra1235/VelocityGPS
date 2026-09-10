@@ -1,0 +1,80 @@
+name: Build Debug APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: debug-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and publish debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 9.6.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Build debug APK
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp app/build/outputs/apk/debug/app-debug.apk release/VelocityGPS-debug.apk
+          cd release
+          sha256sum VelocityGPS-debug.apk > VelocityGPS-debug.apk.sha256
+
+      - name: Upload Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VelocityGPS-debug-${{ github.run_number }}
+          path: |
+            release/VelocityGPS-debug.apk
+            release/VelocityGPS-debug.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: debug-${{ github.run_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              release/VelocityGPS-debug.apk \
+              release/VelocityGPS-debug.apk.sha256 \
+              --clobber
+          else
+            gh release create "$TAG" \
+              release/VelocityGPS-debug.apk \
+              release/VelocityGPS-debug.apk.sha256 \
+              --target "$GITHUB_SHA" \
+              --title "Velocity GPS Debug #${GITHUB_RUN_NUMBER}" \
+              --notes "Automated debug APK built from commit ${GITHUB_SHA}. This is an unsigned-for-production debug build intended for direct testing." \
+              --prerelease
+          fi
